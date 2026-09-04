@@ -1,0 +1,6 @@
+{
+  "name": "Undercut",
+  "description": "Timeline video trimmer with live output-size estimation",
+  "command": "python main.py",
+  "icon": ""
+}

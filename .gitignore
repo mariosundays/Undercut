@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+.idea/
+.vscode/
+releases/
+
+# Superseded two-track prototype, kept locally for reference only.
+_v2_twotrack/
+
+# Test artefacts
+*_test.mp4
+*_thumb.mp4
+
+# PyInstaller writes this from build.bat
+*.spec
