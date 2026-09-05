@@ -1,0 +1,24 @@
+{
+  // PyInstaller output is ~400 MB across hundreds of files. Watching or
+  // indexing it will hang VS Code, so keep it out of the watcher, search
+  // and the file tree. Git already ignores these; this is separate.
+  "files.watcherExclude": {
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/ffmpeg_bin/**": true,
+    "**/releases/**": true,
+    "**/__pycache__/**": true,
+    "**/_v2_twotrack/**": true
+  },
+  "search.exclude": {
+    "**/dist": true,
+    "**/build": true,
+    "**/ffmpeg_bin": true,
+    "**/releases": true,
+    "**/_v2_twotrack": true
+  },
+  "files.exclude": {
+    "**/__pycache__": true,
+    "**/*.spec": true
+  }
+}

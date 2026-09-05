@@ -1,0 +1,128 @@
+name: Build and Release
+
+# Push a version tag like v0.1.0 and GitHub builds the Windows app, bundles
+# ffmpeg into it, and attaches an installer + zip to a Release.
+on:
+  push:
+    tags:
+      - "v*"
+  # Build from the Actions tab without tagging - produces artifacts, no Release.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Read version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = python -c "import sys; sys.path.insert(0,'.'); from app import __version__ as v; print(v)"
+          echo "version=$v" >> $env:GITHUB_OUTPUT
+          Write-Host "Building version $v"
+
+      - name: Fetch ffmpeg
+        shell: pwsh
+        run: |
+          # gyan.dev publishes static GPL builds; "essentials" carries the
+          # encoders Undercut needs (libx264, aac) at a modest size.
+          $url = "https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip"
+          Invoke-WebRequest -Uri $url -OutFile ffmpeg.zip -UseBasicParsing
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl -Force
+
+          New-Item -ItemType Directory -Force -Path ffmpeg_bin | Out-Null
+          Get-ChildItem ffmpeg_dl -Recurse -Include ffmpeg.exe, ffprobe.exe |
+            ForEach-Object { Copy-Item $_.FullName ffmpeg_bin }
+
+          # Fail loudly here rather than shipping a build that cannot encode.
+          foreach ($exe in @("ffmpeg.exe", "ffprobe.exe")) {
+            if (-not (Test-Path "ffmpeg_bin\$exe")) {
+              throw "$exe missing from the ffmpeg download"
+            }
+          }
+          Get-ChildItem ffmpeg_bin | Format-Table Name, Length
+
+      - name: Build app with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --clean --windowed --onedir `
+            --name Undercut `
+            --icon "app\icon.ico" `
+            --add-data "app\icon.ico;app" `
+            --add-data "app\icon.png;app" `
+            --add-binary "ffmpeg_bin\ffmpeg.exe;ffmpeg" `
+            --add-binary "ffmpeg_bin\ffprobe.exe;ffmpeg" `
+            main.py
+
+      - name: Verify the build
+        shell: pwsh
+        run: |
+          $exe = "dist\Undercut\Undercut.exe"
+          if (-not (Test-Path $exe)) { throw "Undercut.exe was not produced" }
+          # PyInstaller puts --add-binary content under _internal for onedir.
+          $ff = Get-ChildItem dist\Undercut -Recurse -Filter ffmpeg.exe |
+                Select-Object -First 1
+          if (-not $ff) { throw "ffmpeg.exe was not bundled" }
+          Write-Host "exe    : $((Get-Item $exe).Length) bytes"
+          Write-Host "ffmpeg : $($ff.FullName)"
+
+      - name: Zip the build
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path releases | Out-Null
+          Compress-Archive -Path 'dist\Undercut\*' `
+            -DestinationPath "releases\Undercut_v${{ steps.ver.outputs.version }}.zip" -Force
+
+      - name: Compile installer (Inno Setup)
+        shell: pwsh
+        run: |
+          # Inno Setup 6 ships preinstalled on windows-latest runners.
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) {
+            choco install innosetup --no-progress -y
+            $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          }
+          & $iscc "/DAppVersion=${{ steps.ver.outputs.version }}" installer.iss
+          Get-ChildItem releases | Format-Table Name, Length
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Undercut-v${{ steps.ver.outputs.version }}
+          path: releases/*
+
+      - name: Publish Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: releases/*
+          generate_release_notes: true
+          body: |
+            **Undercut v${{ steps.ver.outputs.version }}**
+
+            Trim a video to a target file size.
+
+            - `Undercut_v${{ steps.ver.outputs.version }}_setup.exe` - installer
+              (Start Menu entry, optional desktop shortcut, uninstaller)
+            - `Undercut_v${{ steps.ver.outputs.version }}.zip` - portable, unzip
+              and run `Undercut.exe`
+
+            ffmpeg is bundled, so there is nothing else to install.

@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 # Prevent ffmpeg child processes from flashing a console window under pythonw.
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -15,8 +16,39 @@ _COMMON_DIRS = [
 ]
 
 
+def _bundled_dirs():
+    """Places a packaged build might keep its own ffmpeg.
+
+    PyInstaller 6 puts onedir payloads under `_internal/`, while onefile
+    unpacks to `_MEIPASS` and older layouts sat beside the exe - so check all
+    three rather than betting on one.
+    """
+    if not getattr(sys, "frozen", False):
+        return []
+
+    roots = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots.append(meipass)
+    exe_dir = os.path.dirname(sys.executable)
+    roots.append(os.path.join(exe_dir, "_internal"))
+    roots.append(exe_dir)
+
+    return [os.path.join(root, "ffmpeg") for root in roots]
+
+
 def _find(name):
-    """Locate an ffmpeg-family binary on PATH, then in the usual install dirs."""
+    """Locate an ffmpeg-family binary.
+
+    A bundled copy wins over the system one: a packaged build must behave the
+    same everywhere, rather than picking up whatever version happens to be
+    installed on the machine.
+    """
+    for folder in _bundled_dirs():
+        candidate = os.path.join(folder, name + ".exe")
+        if os.path.isfile(candidate):
+            return candidate
+
     found = shutil.which(name)
     if found:
         return found

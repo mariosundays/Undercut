@@ -10,7 +10,11 @@ venv/
 build/
 dist/
 .idea/
-.vscode/
+.vscode/*
+# ...but share the watcher exclusions; without them VS Code indexes the
+# 400 MB PyInstaller output and hangs. (Must ignore .vscode/* not .vscode/ -
+# git will not descend into an ignored DIRECTORY to un-ignore a file.)
+!.vscode/settings.json
 releases/
 
 # Superseded two-track prototype, kept locally for reference only.
@@ -22,3 +26,6 @@ _v2_twotrack/
 
 # PyInstaller writes this from build.bat
 *.spec
+
+# Local PyInstaller output (CI builds the real thing)
+ffmpeg_bin/
