@@ -6,7 +6,7 @@ import subprocess
 import qtawesome as qta
 
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QKeySequence, QPainter
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy,
@@ -20,6 +20,16 @@ from .trimbar import TrimBar
 from .widgets import PresetStore, TargetField, show_preset_menu
 
 ICON = "#e0e0e0"          # icon tint, matching the body text
+
+
+def app_icon():
+    """The window/taskbar icon, baked from Lucide's 'underline' mark."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for name in ("icon.ico", "icon.png"):
+        path = os.path.join(here, name)
+        if os.path.exists(path):
+            return QIcon(path)
+    return QIcon()
 
 VIDEO_FILTER = (
     "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv);;"
@@ -119,6 +129,7 @@ class MainWindow(QMainWindow):
         self.presets = PresetStore()
 
         self.setWindowTitle("Undercut")
+        self.setWindowIcon(app_icon())
         self.resize(1180, 800)
         self.setStyleSheet(STYLE)
 

@@ -162,3 +162,8 @@ reference.
 ## Licence
 
 GPL-3.0. See [LICENSE](LICENSE).
+
+The app icon is derived from the "underline" mark in
+[Lucide](https://lucide.dev/icons/underline), used under the ISC licence.
+Interface icons come from [Material Design Icons](https://pictogrammers.com/library/mdi/)
+via [QtAwesome](https://github.com/spyder-ide/qtawesome).
