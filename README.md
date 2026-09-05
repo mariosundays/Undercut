@@ -14,7 +14,8 @@ come in under 12 MB.
 
 - Python 3.11+
 - `pip install -r requirements.txt` (PySide6, PyAV, QtAwesome)
-- **ffmpeg + ffprobe** on PATH, or in `C:\ffmpeg\bin`
+- **ffmpeg** on PATH, or in `C:\ffmpeg\bin` (metadata is read via PyAV; only
+  encoding shells out)
 
 ## Run
 
@@ -136,7 +137,7 @@ EOF handling, and the window end-to-end.
 Undercut/
 ├── main.py                 entry point
 ├── app/
-│   ├── ffmpeg_tools.py     binary discovery + ffprobe metadata
+│   ├── ffmpeg_tools.py     binary discovery + PyAV metadata probe
 │   ├── decoder.py          PyAV decode, seek, LRU frame cache
 │   ├── proxy.py            background preview proxy + cache
 │   ├── playback.py         decode thread, scrub coalescing

@@ -7,5 +7,5 @@ pyinstaller --noconfirm --windowed --name "Undercut" ^
   main.py
 echo.
 echo Build finished. Run dist\Undercut\Undercut.exe
-echo NOTE: ffmpeg.exe and ffprobe.exe must be on PATH (or in C:\ffmpeg\bin).
+echo NOTE: ffmpeg.exe must be on PATH (or in C:\ffmpeg\bin).
 pause

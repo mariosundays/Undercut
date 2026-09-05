@@ -715,7 +715,7 @@ class MainWindow(QMainWindow):
     def _warn_no_ffmpeg(self):
         QMessageBox.critical(
             self, "FFmpeg not found",
-            "Undercut needs ffmpeg and ffprobe on PATH (or in C:\\ffmpeg\\bin).\n\n"
+            "Undercut needs ffmpeg on PATH (or in C:\\ffmpeg\\bin).\n\n"
             "Install from https://ffmpeg.org/download.html, then restart.",
         )
 

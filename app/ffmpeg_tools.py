@@ -1,10 +1,17 @@
-"""FFmpeg / FFprobe discovery and media probing."""
+"""FFmpeg discovery, and media probing through PyAV.
 
-import json
+Metadata is read with PyAV rather than ffprobe.exe: PyAV already carries a
+complete FFmpeg in its own libraries, so bundling ffprobe.exe as well shipped
+the same code twice for ~88 MB. Encoding still shells out to ffmpeg.exe, whose
+two-pass rate control the size estimate is calibrated against.
+"""
+
 import os
 import shutil
 import subprocess
 import sys
+
+import av
 
 # Prevent ffmpeg child processes from flashing a console window under pythonw.
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -60,11 +67,12 @@ def _find(name):
 
 
 FFMPEG = _find("ffmpeg")
-FFPROBE = _find("ffprobe")
 
 
 def available():
-    return bool(FFMPEG and FFPROBE)
+    """Whether the app can export. Probing only needs PyAV, which is a hard
+    dependency, so ffmpeg alone decides this."""
+    return bool(FFMPEG)
 
 
 def run(args, **kwargs):
@@ -100,80 +108,81 @@ class MediaInfo:
         return f"{self.width}x{self.height}"
 
 
-def _parse_fps(rate):
-    """Turn ffprobe's '30000/1001' rational string into a float."""
+def _is_cover_art(stream):
+    """True for embedded thumbnail streams, which are not the real video."""
     try:
-        if "/" in str(rate):
-            num, den = str(rate).split("/")
-            den = float(den)
-            return float(num) / den if den else 0.0
-        return float(rate)
-    except (ValueError, ZeroDivisionError):
-        return 0.0
+        return bool(stream.disposition & av.stream.Disposition.attached_pic)
+    except (AttributeError, TypeError):
+        return False
 
 
 def probe(path):
     """Read stream + format metadata for one media file. Returns None on failure."""
-    if not FFPROBE:
-        return None
-
-    result = run([
-        FFPROBE, "-v", "error", "-print_format", "json",
-        "-show_format", "-show_streams", path,
-    ])
-    if result.returncode != 0:
+    try:
+        container = av.open(path)
+    except Exception:
+        # Unreadable, not a media file, or no demuxer for it.
         return None
 
     try:
-        data = json.loads(result.stdout)
-    except (ValueError, TypeError):
-        return None
+        video = None
+        audio = None
+        for stream in container.streams:
+            if stream.type == "video" and video is None:
+                if _is_cover_art(stream):
+                    continue
+                video = stream
+            elif stream.type == "audio" and audio is None:
+                audio = stream
 
-    video = None
-    audio = None
-    for stream in data.get("streams", []):
-        kind = stream.get("codec_type")
-        if kind == "video" and video is None:
-            # Skip embedded cover-art / thumbnail streams.
-            if stream.get("disposition", {}).get("attached_pic"):
-                continue
-            video = stream
-        elif kind == "audio" and audio is None:
-            audio = stream
+        if video is None:
+            return None
 
-    if video is None:
-        return None
+        # Container duration is authoritative; fall back to the stream's own.
+        duration = 0.0
+        if container.duration:
+            duration = container.duration / av.time_base
+        if duration <= 0 and video.duration and video.time_base:
+            duration = float(video.duration * video.time_base)
 
-    fmt = data.get("format", {})
-    duration = float(fmt.get("duration") or video.get("duration") or 0.0)
+        # average_rate matches ffprobe's avg_frame_rate; base_rate its
+        # r_frame_rate. 25 is the same last resort the old path used.
+        fps = 0.0
+        if video.average_rate:
+            fps = float(video.average_rate)
+        if fps <= 0 and video.base_rate:
+            fps = float(video.base_rate)
+        if fps <= 0:
+            fps = 25.0
 
-    fps = _parse_fps(video.get("avg_frame_rate") or 0)
-    if fps <= 0:
-        fps = _parse_fps(video.get("r_frame_rate") or 0)
-    if fps <= 0:
-        fps = 25.0
-
-    abitrate = 0
-    if audio is not None:
+        codec = video.codec_context
         try:
-            abitrate = int(audio.get("bit_rate") or 0)
-        except (ValueError, TypeError):
-            abitrate = 0
+            filesize = os.path.getsize(path)
+        except OSError:
+            filesize = 0
 
-    try:
-        filesize = int(fmt.get("size") or 0)
-    except (ValueError, TypeError):
-        filesize = 0
+        abitrate = 0
+        acodec = ""
+        if audio is not None:
+            acodec = audio.codec_context.name or ""
+            try:
+                abitrate = int(audio.bit_rate or 0)
+            except (ValueError, TypeError):
+                abitrate = 0
 
-    return MediaInfo(
-        path=path,
-        duration=duration,
-        width=int(video.get("width") or 0),
-        height=int(video.get("height") or 0),
-        fps=fps,
-        has_audio=audio is not None,
-        vcodec=video.get("codec_name", "?"),
-        acodec=(audio or {}).get("codec_name", ""),
-        filesize=filesize,
-        abitrate=abitrate,
-    )
+        return MediaInfo(
+            path=path,
+            duration=duration,
+            width=codec.width or 0,
+            height=codec.height or 0,
+            fps=fps,
+            has_audio=audio is not None,
+            vcodec=codec.name or "?",
+            acodec=acodec,
+            filesize=filesize,
+            abitrate=abitrate,
+        )
+    except Exception:
+        return None
+    finally:
+        container.close()

@@ -49,14 +49,14 @@ jobs:
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg_dl -Force
 
           New-Item -ItemType Directory -Force -Path ffmpeg_bin | Out-Null
-          Get-ChildItem ffmpeg_dl -Recurse -Include ffmpeg.exe, ffprobe.exe |
+          # ffmpeg.exe only - metadata is read through PyAV, which carries its
+          # own FFmpeg, so bundling ffprobe.exe too would ship it twice.
+          Get-ChildItem ffmpeg_dl -Recurse -Include ffmpeg.exe |
             ForEach-Object { Copy-Item $_.FullName ffmpeg_bin }
 
           # Fail loudly here rather than shipping a build that cannot encode.
-          foreach ($exe in @("ffmpeg.exe", "ffprobe.exe")) {
-            if (-not (Test-Path "ffmpeg_bin\$exe")) {
-              throw "$exe missing from the ffmpeg download"
-            }
+          if (-not (Test-Path "ffmpeg_bin\ffmpeg.exe")) {
+            throw "ffmpeg.exe missing from the ffmpeg download"
           }
           Get-ChildItem ffmpeg_bin | Format-Table Name, Length
 
@@ -69,7 +69,6 @@ jobs:
             --add-data "app\icon.ico;app" `
             --add-data "app\icon.png;app" `
             --add-binary "ffmpeg_bin\ffmpeg.exe;ffmpeg" `
-            --add-binary "ffmpeg_bin\ffprobe.exe;ffmpeg" `
             main.py
 
       - name: Verify the build
