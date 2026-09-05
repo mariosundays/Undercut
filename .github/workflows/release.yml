@@ -83,6 +83,42 @@ jobs:
           Write-Host "exe    : $((Get-Item $exe).Length) bytes"
           Write-Host "ffmpeg : $($ff.FullName)"
 
+      - name: Smoke-test the packaged app
+        shell: pwsh
+        run: |
+          # Checking that files exist is not enough: a build missing a hidden
+          # dependency still produces every file and then dies on launch. So
+          # actually start it and require that the real window comes up.
+          $exe = (Resolve-Path "dist\Undercut\Undercut.exe").Path
+          $err = "$env:RUNNER_TEMP\smoke_err.txt"
+          $proc = Start-Process -FilePath $exe -PassThru `
+            -RedirectStandardError $err -RedirectStandardOutput "$env:RUNNER_TEMP\smoke_out.txt"
+
+          Start-Sleep -Seconds 20
+          $proc.Refresh()
+
+          if ($proc.HasExited) {
+            Write-Host "--- stderr ---"
+            if (Test-Path $err) { Get-Content $err }
+            throw "Undercut.exe exited with code $($proc.ExitCode) - the packaged build cannot start"
+          }
+
+          # A windowed PyInstaller build does NOT exit when an import fails -
+          # it shows a modal "Unhandled exception in script" dialog and waits
+          # forever. Staying alive therefore proves nothing; the window title
+          # is what separates a running app from a crash box.
+          $title = $proc.MainWindowTitle
+          Write-Host "window title: '$title'"
+          if ($title -ne "Undercut") {
+            Write-Host "--- stderr ---"
+            if (Test-Path $err) { Get-Content $err }
+            Stop-Process -Id $proc.Id -Force
+            throw "Expected the 'Undercut' window; got '$title' - the packaged build failed to start cleanly"
+          }
+
+          Stop-Process -Id $proc.Id -Force
+          Write-Host "Packaged app launched and showed its window."
+
       - name: Zip the build
         shell: pwsh
         run: |
