@@ -81,6 +81,24 @@ class Project:
         floor = self.in_point + self._min_span()
         self.out_point = min(self.source_duration, max(seconds, floor))
 
+    def slide_selection(self, seconds):
+        """Move in and out together by `seconds`, keeping the span fixed.
+
+        Both points move as one, so the cut keeps the duration - and therefore
+        the size and quality - already dialled in, and only its position in the
+        source changes. set_in/set_out cannot do this: they clamp against each
+        other, so moving one then the other would squash the span at the ends.
+        """
+        if not self.loaded:
+            return
+        span = self.out_point - self.in_point
+        # Clamp the move itself, so the selection stops at either end of the
+        # source with its length intact rather than being trimmed by it.
+        shift = max(-self.in_point,
+                    min(seconds, self.source_duration - self.out_point))
+        self.in_point += shift
+        self.out_point = self.in_point + span
+
     def select_all(self):
         if self.loaded:
             self.in_point = 0.0

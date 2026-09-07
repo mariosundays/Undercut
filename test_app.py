@@ -84,6 +84,37 @@ def main():
     if abs(project.duration - media.duration) > 1e-6:
         failures.append("T1 select_all did not restore the full range")
 
+    # --- 1b. sliding keeps the span, and so the size ------------------------
+    # The whole point of a slide is that only the position changes, so the
+    # export size the user has dialled in survives it.
+    project.set_in(2.0)
+    project.set_out(5.0)
+    span = project.duration
+    before = project.estimate()["bytes"]
+
+    project.slide_selection(1.5)
+    print(f"\nT1b slide +1.5s: in={project.in_point:.2f} "
+          f"out={project.out_point:.2f} span={project.duration:.2f}")
+    if abs(project.duration - span) > 1e-6:
+        failures.append("T1b slide changed the selection length")
+    if abs(project.in_point - 3.5) > 1e-6:
+        failures.append("T1b slide did not move the in-point")
+    if abs(project.estimate()["bytes"] - before) > 1024:
+        failures.append("T1b slide changed the estimated size")
+
+    # Both ends must clamp the move, not squash the span.
+    project.slide_selection(-999)
+    left_ok = project.in_point == 0.0 and abs(project.duration - span) < 1e-6
+    project.slide_selection(999)
+    right_ok = (abs(project.out_point - media.duration) < 1e-6
+                and abs(project.duration - span) < 1e-6)
+    print(f"   clamped at both ends keeping {span:.2f}s: "
+          f"left={left_ok} right={right_ok}")
+    if not left_ok:
+        failures.append("T1b slide past the start did not clamp cleanly")
+    if not right_ok:
+        failures.append("T1b slide past the end did not clamp cleanly")
+
     # --- 2. the size estimate is the target --------------------------------
     project.set_in(1.0)
     project.set_out(6.0)
@@ -308,6 +339,22 @@ def main():
     print(f"   readout: {shown} / quality {win.quality_label.text()}")
     if shown == "0 MB":
         failures.append("T6 size readout did not update")
+
+    # grabbing the block slides it; the handles still own the edges
+    win.project.set_in(2.0)
+    win.project.set_out(5.0)
+    bar = win.trim
+    y = bar.strip_rect().center().y()
+    mid_x = (bar.x_for(win.project.in_point)
+             + bar.x_for(win.project.out_point)) / 2
+    zones = (
+        bar._zone(QPointF(mid_x, y)),
+        bar._zone(QPointF(bar.x_for(win.project.in_point) + 2, y)),
+        bar._zone(QPointF(bar.x_for(win.project.out_point) - 2, y)),
+    )
+    print(f"   trim zones (body, in, out): {zones}")
+    if zones != ("body", "in", "out"):
+        failures.append(f"T6 trim bar zones wrong: {zones}")
 
     win.shutdown()
 

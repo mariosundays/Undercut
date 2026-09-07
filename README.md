@@ -75,6 +75,7 @@ with the output duration matching the selection exactly.
 |---|---|
 | Open | Folder button, drag-and-drop, or `Ctrl+O` |
 | Set in / out | Drag the yellow handles, or `I` / `O` at the playhead |
+| Slide the selection | Drag the middle of the blue block - keeps the length, and so the size, while you pick a different part of the clip |
 | Scrub | Click or drag anywhere on the strip |
 | Play / pause | `Play` button or `Space` (plays the selection) |
 | Loop | Loop button or `L` - repeats the selection |

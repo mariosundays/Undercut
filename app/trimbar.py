@@ -39,8 +39,9 @@ class TrimBar(QWidget):
         self.project = project
         self.playhead = 0.0
 
-        self._drag = None               # 'in' | 'out' | 'scrub'
+        self._drag = None               # 'in' | 'out' | 'body' | 'scrub'
         self._hover = None
+        self._grab_offset = 0.0         # seconds into the block, for 'body'
         self.setMinimumHeight(STRIP_TOP + STRIP_H + 30)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -206,6 +207,9 @@ class TrimBar(QWidget):
             return "in"
         if abs(pos.x() - (out_x - HANDLE_W / 2)) <= HANDLE_W:
             return "out"
+        # Handles win over the body, so a narrow selection stays trimmable.
+        if in_x < pos.x() < out_x:
+            return "body"
         return None
 
     def mousePressEvent(self, event):
@@ -216,6 +220,11 @@ class TrimBar(QWidget):
         zone = self._zone(pos)
         if zone:
             self._drag = zone
+            if zone == "body":
+                # Remember where in the block it was grabbed, so it slides from
+                # under the cursor instead of jumping to centre on it.
+                self._grab_offset = self.time_for(pos.x()) - self.project.in_point
+                self.setCursor(Qt.ClosedHandCursor)
             return
 
         self._drag = "scrub"
@@ -229,7 +238,12 @@ class TrimBar(QWidget):
             if hover != self._hover:
                 self._hover = hover
                 self.update()
-            self.setCursor(Qt.SizeHorCursor if hover else Qt.ArrowCursor)
+            if hover == "body":
+                self.setCursor(Qt.OpenHandCursor)
+            elif hover:
+                self.setCursor(Qt.SizeHorCursor)
+            else:
+                self.setCursor(Qt.ArrowCursor)
             return
 
         seconds = self.time_for(pos.x())
@@ -243,6 +257,14 @@ class TrimBar(QWidget):
             self._set_playhead(self.project.out_point)
             self.selection_changed.emit()
             self.update()
+        elif self._drag == "body":
+            # Where the in-point should land to keep the grab point under the
+            # cursor; slide_selection turns that into a fixed-span move.
+            target_in = seconds - self._grab_offset
+            self.project.slide_selection(target_in - self.project.in_point)
+            self._set_playhead(self.project.in_point)
+            self.selection_changed.emit()
+            self.update()
         else:
             self._set_playhead(seconds)
 
@@ -250,7 +272,15 @@ class TrimBar(QWidget):
         if self._drag is not None:
             self._drag = None
             self.playhead_settled.emit(self.playhead)
-        self.setCursor(Qt.ArrowCursor)
+        # Back to whatever the cursor is now over, rather than a blanket arrow -
+        # releasing a slide inside the block should leave the open hand.
+        self._hover = self._zone(event.position())
+        if self._hover == "body":
+            self.setCursor(Qt.OpenHandCursor)
+        elif self._hover:
+            self.setCursor(Qt.SizeHorCursor)
+        else:
+            self.setCursor(Qt.ArrowCursor)
         self.update()
 
     def keyPressEvent(self, event):
