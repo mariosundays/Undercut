@@ -18,6 +18,7 @@ class ExportSettings:
         self.preset = "slow"
         self.max_width = 1920          # 0 = keep source
         self.fps = 0                   # 0 = keep source
+        self.speed = 1.0               # 1.0 = real time, 2.0 = twice as fast
         self.audio = False             # thumbnails are silent by default
         self.audio_kbps = 128
         self.faststart = True
@@ -57,10 +58,26 @@ class Project:
 
     @property
     def duration(self):
-        """Length of the SELECTION - what actually gets exported."""
+        """Length of the SELECTION in the source, before any speed change.
+
+        This is the span between the handles - what the trim bar draws and
+        what the encoder reads from the file. For how long the exported clip
+        actually runs, and what the size is calculated from, use
+        `output_duration`.
+        """
         if not self.loaded:
             return 0.0
         return max(0.0, self.out_point - self.in_point)
+
+    @property
+    def output_duration(self):
+        """How long the export runs once sped up.
+
+        Speed drops frames rather than raising the frame rate, so 4s at 2x is
+        2s of the same fps - half the frames, and roughly half the bytes. Every
+        size calculation works from this, never from the raw selection.
+        """
+        return self.duration / max(0.01, self.settings.speed)
 
     @property
     def source_duration(self):
@@ -166,7 +183,10 @@ class Project:
         drag the handles: below the target, the cut fits comfortably; above
         it, the target is squeezing the footage.
         """
-        duration = self.duration
+        # Everything below is about the EXPORTED clip, so it works from the
+        # sped-up length: at 2x there are half as many frames to encode, and
+        # the file is roughly half the size.
+        duration = self.output_duration
         if duration <= 0:
             return {
                 "duration": 0.0, "bytes": 0, "bitrate": 0, "quality": None,

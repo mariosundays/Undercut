@@ -9,7 +9,7 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy,
+    QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSlider,
     QVBoxLayout, QWidget,
 )
 
@@ -17,7 +17,7 @@ from . import encoder, estimator, ffmpeg_tools, proxy
 from .model import Project
 from .playback import PlaybackEngine
 from .trimbar import TrimBar
-from .widgets import PresetStore, TargetField, show_preset_menu
+from .widgets import PresetStore, SpeedSlider, TargetField, show_preset_menu
 
 ICON = "#e0e0e0"          # icon tint, matching the body text
 
@@ -35,6 +35,12 @@ VIDEO_FILTER = (
     "Video files (*.mp4 *.mov *.mkv *.avi *.webm *.m4v *.mpg *.mpeg *.wmv);;"
     "All files (*.*)"
 )
+
+# The speed slider works in integer steps because QSlider is integer-only;
+# quarter-steps keep 1x/2x/4x/5x on exact ticks while still allowing 1.25x etc.
+SPEED_STEP_PER_X = 4
+SPEED_MIN_STEP = SPEED_STEP_PER_X            # 1.0x
+SPEED_MAX_STEP = SPEED_STEP_PER_X * 5        # 5.0x
 
 STYLE = """
 QMainWindow, QWidget { background: #1a1a1a; color: #e0e0e0; }
@@ -73,6 +79,18 @@ QComboBox QAbstractItemView {
     background: #252525; color: #e0e0e0; selection-background-color: #2d5a7a;
 }
 QCheckBox { color: #e0e0e0; }
+QLabel#speedValue { color: #7fd6a8; font-weight: bold; }
+QSlider::groove:horizontal {
+    background: #252525; border: 1px solid #3d3d3d;
+    border-radius: 2px; height: 4px;
+}
+QSlider::sub-page:horizontal { background: #4a7f66; border-radius: 2px; }
+QSlider::handle:horizontal {
+    background: #7fd6a8; border-radius: 6px;
+    width: 12px; margin: -5px 0;
+}
+QSlider::handle:horizontal:hover { background: #9be6bd; }
+QSlider::tick-mark { color: #606060; }
 QFrame#panel { background: #202020; border-left: 1px solid #2d2d2d; }
 QFrame#sizeCard {
     background: #232323; border: 1px solid #333; border-radius: 4px;
@@ -343,6 +361,28 @@ class MainWindow(QMainWindow):
         fps_row.addWidget(self.fps_combo, 1)
         layout.addLayout(fps_row)
 
+        # Speed. The slider works in quarter-steps so any rate between 1x and
+        # 5x is reachable, with ticks sitting on the round ones.
+        speed_row = QHBoxLayout()
+        speed_row.addWidget(QLabel("Speed"))
+        self.speed_slider = SpeedSlider(Qt.Horizontal, SPEED_STEP_PER_X)
+        self.speed_slider.setRange(SPEED_MIN_STEP, SPEED_MAX_STEP)
+        self.speed_slider.setValue(SPEED_STEP_PER_X)      # 1.0x
+        self.speed_slider.setTickPosition(QSlider.TicksBelow)
+        self.speed_slider.setTickInterval(SPEED_STEP_PER_X)
+        self.speed_slider.setPageStep(SPEED_STEP_PER_X)
+        self.speed_slider.setToolTip(
+            "Speed up the clip. Frames are dropped, so the export gets "
+            "shorter and smaller - double-click to reset to 1x."
+        )
+        speed_row.addWidget(self.speed_slider, 1)
+        self.speed_label = QLabel("1x")
+        self.speed_label.setObjectName("speedValue")
+        self.speed_label.setMinimumWidth(42)
+        self.speed_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        speed_row.addWidget(self.speed_label)
+        layout.addLayout(speed_row)
+
         self.audio_check = QCheckBox("Keep audio")
         layout.addWidget(self.audio_check)
 
@@ -423,6 +463,7 @@ class MainWindow(QMainWindow):
         self.fps_combo.currentIndexChanged.connect(self._pull_settings)
         self.audio_check.toggled.connect(self._pull_settings)
         self.faststart_check.toggled.connect(self._pull_settings)
+        self.speed_slider.valueChanged.connect(self._pull_settings)
 
     # -- settings -----------------------------------------------------------
 
@@ -435,6 +476,12 @@ class MainWindow(QMainWindow):
         s.fps = self.fps_combo.currentData()
         s.audio = self.audio_check.isChecked()
         s.faststart = self.faststart_check.isChecked()
+        s.speed = self.speed_slider.value() / SPEED_STEP_PER_X
+        # Whole numbers read as "2x", anything between as "1.25x".
+        self.speed_label.setText(
+            f"{s.speed:g}x" if s.speed % 1 else f"{int(s.speed)}x"
+        )
+        self.trim.update()      # the strip shades the speed-shortened tail
         self.refresh()
 
     # -- loading ------------------------------------------------------------
@@ -651,11 +698,15 @@ class MainWindow(QMainWindow):
             self.quality_note.setText(quality["note"])
 
         width, height, fps = self.project.output_geometry()
-        self.detail_label.setText(
+        speed = self.project.settings.speed
+        detail = (
             f"exports at {estimator.fmt_size(est['bytes'])} · "
             f"{estimator.fmt_time(est['duration'])} · {width}x{height} @ "
             f"{fps:.0f} fps · {estimator.fmt_bitrate(est['bitrate'])}"
         )
+        if speed > 1.0:
+            detail += f" · {speed:g}x speed"
+        self.detail_label.setText(detail)
         self.export_btn.setEnabled(ffmpeg_tools.available())
 
     # -- export -------------------------------------------------------------

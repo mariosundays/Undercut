@@ -4,7 +4,7 @@ import json
 import os
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtWidgets import QInputDialog, QLabel, QMenu
+from PySide6.QtWidgets import QInputDialog, QLabel, QMenu, QSlider
 
 PRESET_FILE = os.path.join(
     os.path.expandvars(r"%APPDATA%"), "Undercut", "presets.json"
@@ -118,6 +118,22 @@ class TargetField(QLabel):
         self.setValue(
             self._value + (step if event.angleDelta().y() > 0 else -step)
         )
+
+
+class SpeedSlider(QSlider):
+    """A slider that snaps back to its default on double-click.
+
+    QSlider has no double-click signal of its own, and a stray double-click
+    otherwise just moves the handle - which is a poor way to get back to 1x.
+    """
+
+    def __init__(self, orientation, default, parent=None):
+        super().__init__(orientation, parent)
+        self._default = default
+
+    def mouseDoubleClickEvent(self, event):
+        self.setValue(self._default)
+        event.accept()
 
 
 class PresetStore:

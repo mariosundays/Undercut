@@ -115,6 +115,47 @@ def main():
     if not right_ok:
         failures.append("T1b slide past the end did not clamp cleanly")
 
+    # --- 1c. speed shortens the output and the size ------------------------
+    # Speed drops frames rather than raising fps, so 2x is half the frames and
+    # roughly half the bytes. The source selection itself must not move.
+    project.set_in(0.0)
+    project.set_out(min(8.0, media.duration))
+    project.settings.speed = 1.0
+    src_span = project.duration
+    base_bytes = project.estimate()["quality_bytes"]
+
+    for speed in (2.0, 4.0, 5.0):
+        project.settings.speed = speed
+        out_dur = project.output_duration
+        got = project.estimate()["quality_bytes"]
+        want = base_bytes / speed
+        print(f"T1c {speed:g}x: source {project.duration:.2f}s -> output "
+              f"{out_dur:.2f}s, needs {estimator.fmt_size(got)}")
+        if abs(project.duration - src_span) > 1e-6:
+            failures.append(f"T1c {speed}x changed the source selection")
+        if abs(out_dur - src_span / speed) > 1e-6:
+            failures.append(f"T1c {speed}x output duration wrong")
+        # Bytes scale with frame count, within rounding of the fixed overhead.
+        if abs(got - want) / want > 0.05:
+            failures.append(f"T1c {speed}x size did not scale with speed")
+
+    # The encoder must solve for the same bitrate the panel promised, or the
+    # export silently misses the target.
+    for speed in (1.0, 2.0, 5.0):
+        project.settings.speed = speed
+        est_kbps = int(project.estimate()["bitrate"] / 1000)
+        cmd = encoder.build_command(project, "x.mp4", 2, "log")
+        enc_kbps = int(cmd[cmd.index("-b:v") + 1].rstrip("k"))
+        if abs(est_kbps - enc_kbps) > 1:
+            failures.append(
+                f"T1c {speed}x model {est_kbps}k != encoder {enc_kbps}k")
+        # -t stays the SOURCE length; setpts does the shortening.
+        t_arg = float(cmd[cmd.index("-t") + 1])
+        if abs(t_arg - project.duration) > 1e-3:
+            failures.append(f"T1c {speed}x encoder read the wrong source span")
+    print("   model and encoder agree on bitrate at every speed")
+    project.settings.speed = 1.0
+
     # --- 2. the size estimate is the target --------------------------------
     project.set_in(1.0)
     project.set_out(6.0)

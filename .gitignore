@@ -29,3 +29,6 @@ _v2_twotrack/
 
 # Local PyInstaller output (CI builds the real thing)
 ffmpeg_bin/
+
+# Review copy from an external tool - not part of the app.
+GPT6Mirror/

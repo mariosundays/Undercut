@@ -18,6 +18,24 @@ from . import estimator, ffmpeg_tools
 _PROGRESS_RE = re.compile(r"out_time_ms=(\d+)")
 
 
+def _atempo_chain(speed):
+    """An atempo filter chain for any speed.
+
+    atempo only accepts 0.5-2.0 in one instance, so faster rates are reached
+    by chaining several - 5x becomes 2.0 * 2.0 * 1.25.
+    """
+    remaining = speed
+    parts = []
+    while remaining > 2.0:
+        parts.append("atempo=2.0")
+        remaining /= 2.0
+    while remaining < 0.5:
+        parts.append("atempo=0.5")
+        remaining /= 0.5
+    parts.append(f"atempo={remaining:.6f}")
+    return ",".join(parts)
+
+
 def build_command(project, output_path, pass_num=0, passlog=None):
     """Assemble the ffmpeg argv.
 
@@ -40,15 +58,24 @@ def build_command(project, output_path, pass_num=0, passlog=None):
     ]
 
     filters = [f"scale={width}:{height}:flags=lanczos"]
-    if settings.fps:
+    speed = max(0.01, settings.speed)
+    if speed != 1.0:
+        # setpts restamps the frames closer together; the fps filter after it
+        # then drops whatever no longer fits the frame rate, so the output
+        # keeps the source fps with fewer frames rather than running hot.
+        filters.append(f"setpts={1.0 / speed:.6f}*PTS")
+        filters.append(f"fps={fps}")
+    elif settings.fps:
         filters.append(f"fps={fps}")
     args += ["-vf", ",".join(filters)]
 
     # The target is a CEILING, not a quota. Spending the whole budget on a
     # short cut just inflates the file past the point more bitrate buys any
     # visible quality, so cap at the transparent rate for this geometry.
+    # The sped-up length, matching model.estimate() - the budget has to be
+    # spread over the frames actually written, not the source range read.
     budget_bps = estimator.bitrate_for_target(
-        settings.target_bytes, project.duration,
+        settings.target_bytes, project.output_duration,
         settings.effective_audio_kbps(), audio,
     )
     transparent_bps = estimator.TRANSPARENT_BPP * width * height * max(fps, 1.0)
@@ -73,6 +100,9 @@ def build_command(project, output_path, pass_num=0, passlog=None):
         args += ["-an", "-f", "null", os.devnull]
     else:
         if audio:
+            if speed != 1.0:
+                # Speed the audio to match, or it plays on past the video.
+                args += ["-filter:a", _atempo_chain(speed)]
             args += ["-c:a", "aac", "-b:a", f"{settings.audio_kbps}k"]
         else:
             args += ["-an"]

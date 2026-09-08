@@ -15,6 +15,7 @@ STRIP_OUT = QColor("#242424")       # outside the selection
 STRIP_IN = QColor("#2d5a7a")        # inside the selection
 STRIP_IN_TOP = QColor("#3a6d8f")
 HANDLE = QColor("#ffcc44")
+SPEED_BAR = QColor("#7fd6a8")       # how far the sped-up export reaches
 HANDLE_HOVER = QColor("#ffd968")
 TEXT = QColor("#e0e0e0")
 DIM_TEXT = QColor("#8a8a8a")
@@ -128,6 +129,18 @@ class TrimBar(QWidget):
         painter.setBrush(QBrush(gradient))
         painter.drawRoundedRect(selection, 3, 3)
 
+        # How much of the selection the sped-up export actually fills. The
+        # block still spans the source range being read, so this bar shows
+        # what that collapses to on the output timeline.
+        speed = self.project.settings.speed
+        if speed > 1.0 and selection.width() > 8:
+            played = QRectF(
+                selection.left(), selection.bottom() - 5,
+                max(2.0, selection.width() / speed), 4,
+            )
+            painter.setBrush(QBrush(SPEED_BAR))
+            painter.drawRoundedRect(played, 2, 2)
+
         # Filename across the selection.
         if selection.width() > 60:
             painter.setPen(QColor("#dceaf4"))
@@ -140,6 +153,12 @@ class TrimBar(QWidget):
                 self.project.media.name, Qt.ElideMiddle, int(text_rect.width())
             )
             painter.drawText(text_rect, Qt.AlignLeft | Qt.AlignTop, name)
+
+            # Speed badge, right-aligned on the same line as the filename.
+            if speed > 1.0:
+                painter.setPen(SPEED_BAR)
+                label = f"{speed:g}x"
+                painter.drawText(text_rect, Qt.AlignRight | Qt.AlignTop, label)
 
     def _paint_handles(self, painter):
         rect = self.strip_rect()
@@ -186,6 +205,9 @@ class TrimBar(QWidget):
         painter.setFont(font)
         painter.setPen(TEXT)
         text = f"Selected {estimator.fmt_time(self.project.duration)}"
+        if self.project.settings.speed > 1.0:
+            # Both lengths matter: what was picked, and what gets exported.
+            text += f"  ->  {estimator.fmt_time(self.project.output_duration)}"
         painter.drawText(
             int(self.width() - MARGIN - painter.fontMetrics().horizontalAdvance(text)),
             base, text,

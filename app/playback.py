@@ -165,7 +165,10 @@ class PlaybackEngine(QObject):
 
     def _serve_playback(self):
         """Emit the frame that is due right now, skipping any we are late for."""
-        elapsed = time.perf_counter() - self._play_start_wall
+        # Advance through the source faster when sped up, so the preview runs
+        # at the rate the export will.
+        speed = max(0.01, self.project.settings.speed)
+        elapsed = (time.perf_counter() - self._play_start_wall) * speed
         position = self._play_start_pos + elapsed
 
         if position >= self.project.out_point:
@@ -197,7 +200,11 @@ class PlaybackEngine(QObject):
         # Pace to the project frame rate; if decoding overran, loop straight
         # on and the next position calculation naturally drops frames.
         fps = self.project.preview_fps()
-        target = self._play_start_wall + (position - self._play_start_pos) + 1.0 / fps
+        # Positions are in source time, so convert back to wall time before
+        # pacing - at 2x a second of footage should take half a second.
+        target = (self._play_start_wall
+                  + (position - self._play_start_pos) / speed
+                  + 1.0 / fps)
         slack = target - time.perf_counter()
         if slack > 0:
             time.sleep(min(slack, 0.25))
