@@ -494,6 +494,14 @@ class MainWindow(QMainWindow):
             self.load(path)
 
     def load(self, path):
+        # The encode worker holds its own frozen copy, but swapping the video
+        # under a running export leaves the UI describing the wrong file.
+        if self._encode_thread is not None:
+            self.statusBar().showMessage(
+                "Wait for the current export to finish before opening "
+                "another video.", 5000)
+            return
+
         media = ffmpeg_tools.probe(path)
         if media is None:
             QMessageBox.warning(
@@ -505,6 +513,17 @@ class MainWindow(QMainWindow):
         self.engine.pause()
         self.engine.pool.close_all()
         self.project.load(media)
+
+        # Clear anything belonging to the previous video, or the Play button
+        # keeps offering an export made from a file that is no longer open.
+        self._last_export = ""
+        self.result_btn.setVisible(False)
+        self.proxy_label.setText("")
+
+        # Keeping audio is meaningless when the source has none.
+        self.audio_check.setEnabled(media.has_audio)
+        if not media.has_audio:
+            self.audio_check.setChecked(False)
 
         cached = proxy.existing(path)
         if cached:
@@ -799,6 +818,11 @@ class MainWindow(QMainWindow):
 
         if self._encode_worker is not None:
             self._encode_worker.cancel(wait=True)
+        # Cancelling stops ffmpeg, but the thread carrying the worker still has
+        # to be joined or teardown races it.
+        if self._encode_thread is not None:
+            self._encode_thread.quit()
+            self._encode_thread.wait(4000)
         for thread, worker in self._proxy_jobs:
             worker.cancel(wait=True)
             thread.quit()

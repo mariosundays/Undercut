@@ -34,6 +34,10 @@ You set a **max size** (11.5 MB by default). The bitrate is solved backwards
 from that target, so the export always lands on it - two-pass encoding gets
 within about 2%.
 
+Sizes are **decimal MB** (1 MB = 1,000,000 bytes), because that is what upload
+limits mean. A 12 MB cap is 12,000,000 bytes, and treating it as binary would
+put an 11.5 MB target at 12,058,624 bytes - over the limit.
+
 The panel shows the two numbers as a pair:
 
 - **THIS CUT NEEDS** - what the selection would take to look visually

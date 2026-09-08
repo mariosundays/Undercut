@@ -156,6 +156,48 @@ def main():
     print("   model and encoder agree on bitrate at every speed")
     project.settings.speed = 1.0
 
+    # --- 1d. robustness fixes ----------------------------------------------
+    # Sizes are quoted in decimal MB, because that is what upload limits mean.
+    if estimator.MB != 1_000_000:
+        failures.append("T1d MB is not decimal")
+    if 11.5 * estimator.MB >= 12_000_000:
+        failures.append("T1d an 11.5 MB target exceeds a 12 MB decimal cap")
+
+    # size_for_bitrate must invert bitrate_for_target exactly.
+    bps = estimator.bitrate_for_target(int(3 * estimator.MB), 5.0, 0, False)
+    back = estimator.size_for_bitrate(bps, 5.0, 0, False)
+    if abs(back - 3 * estimator.MB) / (3 * estimator.MB) > 1e-5:
+        failures.append("T1d size/bitrate are not inverses")
+
+    # Odd source heights must still come out even, or yuv420p rejects them.
+    odd = Project()
+    odd.load(media)
+    odd.media.height = media.height | 1
+    odd.settings.max_width = 0
+    if odd.output_geometry()[1] % 2:
+        failures.append("T1d odd source height stayed odd")
+    print(f"\nT1d decimal MB, exact inverse, even geometry from "
+          f"{odd.media.height} -> {odd.output_geometry()[1]}")
+
+    # The worker must freeze its own copy of the project.
+    frozen = Project()
+    frozen.load(media)
+    frozen.set_in(0.0)
+    frozen.set_out(2.0)
+    worker = encoder.EncodeWorker(frozen, "unused.mp4")
+    frozen.settings.speed = 4.0
+    if worker.project.settings.speed != 1.0:
+        failures.append("T1d export was not isolated from later edits")
+
+    # Exporting over the source would corrupt it mid-read.
+    guard = encoder.EncodeWorker(frozen, frozen.media.path)
+    seen = {}
+    guard.finished.connect(lambda ok, msg: seen.update(ok=ok, msg=msg))
+    guard._encode()
+    if seen.get("ok"):
+        failures.append("T1d export over the source was allowed")
+    print(f"   frozen export snapshot, source protected: {seen.get('msg', '')}")
+
     # --- 2. the size estimate is the target --------------------------------
     project.set_in(1.0)
     project.set_out(6.0)

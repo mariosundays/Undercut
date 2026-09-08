@@ -4,12 +4,14 @@ One input, one trimmed range, one output. Two-pass by default so the file
 actually lands on the target size rather than near it.
 """
 
+import copy
 import os
 import re
 import subprocess
 import tempfile
 import threading
 import uuid
+from collections import deque
 
 from PySide6.QtCore import QObject, QThread, Signal
 
@@ -122,7 +124,10 @@ class EncodeWorker(QObject):
 
     def __init__(self, project, output_path):
         super().__init__()
-        self.project = project
+        # Freeze the settings as they were when Export was pressed. Otherwise
+        # nudging the target or the speed slider mid-encode would change what
+        # the second pass is aiming at.
+        self.project = copy.deepcopy(project)
         self.output_path = output_path
         self._proc = None
         self._cancelled = False
@@ -148,17 +153,26 @@ class EncodeWorker(QObject):
                         pass
 
     def _run_pass(self, args, duration, base_pct, span, label):
+        # Cancelling between passes should not start the next one.
+        if self._cancelled:
+            return -1, "Cancelled."
         self._proc = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, encoding="utf-8", errors="replace",
             creationflags=ffmpeg_tools.NO_WINDOW,
         )
+        # A cancel that arrived while the process was being spawned would
+        # otherwise leave it running, unreferenced.
+        if self._cancelled:
+            self.cancel()
 
         # ffmpeg writes progress to stdout and its log to stderr. Reading only
         # stdout lets the stderr pipe fill its OS buffer, at which point ffmpeg
         # blocks forever and the encode never finishes - which is exactly how
         # the progress bar used to get stuck. Drain stderr on its own thread.
-        stderr_lines = []
+        # Bounded: only the tail is ever shown, and a chatty ffmpeg on a long
+        # encode should not grow this without limit.
+        stderr_lines = deque(maxlen=200)
 
         def drain_stderr():
             try:
@@ -200,9 +214,31 @@ class EncodeWorker(QObject):
 
     def _encode(self):
         project = self.project
-        duration = project.duration
+        # ffmpeg reports progress along the OUTPUT timeline, so a sped-up
+        # encode must be measured against the shortened length or the bar
+        # crawls to a fraction of itself and stops.
+        duration = project.output_duration
         if duration <= 0:
             self.finished.emit(False, "Nothing selected.")
+            return
+
+        if self._cancelled:
+            self.finished.emit(False, "Cancelled.")
+            return
+
+        # Writing over the source mid-read corrupts both. Compare real paths
+        # so a symlink or hardlink to the same file is caught too.
+        source = os.path.realpath(project.media.path)
+        destination = os.path.realpath(self.output_path)
+        same = os.path.normcase(source) == os.path.normcase(destination)
+        if not same and os.path.exists(destination):
+            try:
+                same = os.path.samefile(source, destination)
+            except OSError:
+                same = False
+        if same:
+            self.finished.emit(
+                False, "Choose a different filename from the source video.")
             return
 
         folder = os.path.dirname(self.output_path)
@@ -213,10 +249,18 @@ class EncodeWorker(QObject):
         passlog = os.path.join(
             tempfile.gettempdir(), f"undercut_{uuid.uuid4().hex[:8]}"
         )
+        # Encode to a sibling temp file and swap it in only once it is whole.
+        # Writing straight to the destination destroys a previous export the
+        # moment ffmpeg opens it, so a failure or a cancel used to leave
+        # nothing behind.
+        staged = os.path.join(
+            os.path.dirname(os.path.abspath(self.output_path)),
+            f".undercut-{uuid.uuid4().hex}.mp4",
+        )
 
         try:
             if two_pass:
-                args = build_command(project, self.output_path, 1, passlog)
+                args = build_command(project, staged, 1, passlog)
                 code, err = self._run_pass(args, duration, 0, 50,
                                            "Pass 1/2 (analysing)")
                 if self._cancelled:
@@ -226,11 +270,11 @@ class EncodeWorker(QObject):
                     self.finished.emit(False, _tail(err))
                     return
 
-                args = build_command(project, self.output_path, 2, passlog)
+                args = build_command(project, staged, 2, passlog)
                 code, err = self._run_pass(args, duration, 50, 50,
                                            "Pass 2/2 (encoding)")
             else:
-                args = build_command(project, self.output_path, 0)
+                args = build_command(project, staged, 0)
                 code, err = self._run_pass(args, duration, 0, 100, "Encoding")
 
             if self._cancelled:
@@ -240,13 +284,23 @@ class EncodeWorker(QObject):
                 self.finished.emit(False, _tail(err))
                 return
 
-            size = (os.path.getsize(self.output_path)
-                    if os.path.exists(self.output_path) else 0)
+            size = os.path.getsize(staged) if os.path.exists(staged) else 0
+            if not size:
+                self.finished.emit(False, "The encoder produced an empty file.")
+                return
+
+            os.replace(staged, self.output_path)
             self.progress.emit(100, "Done")
             self.finished.emit(
                 True, f"Exported {estimator.fmt_size(size)}"
             )
         finally:
+            # Anything left staged is a failed or cancelled attempt.
+            if os.path.exists(staged):
+                try:
+                    os.remove(staged)
+                except OSError:
+                    pass
             _cleanup_passlogs(passlog)
 
 

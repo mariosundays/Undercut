@@ -14,6 +14,7 @@ threaded for seeking - never use it here.
 import os
 import threading
 from collections import OrderedDict
+from functools import wraps
 
 import av
 import numpy as np
@@ -23,6 +24,20 @@ from PySide6.QtGui import QImage
 # Decoding a frame we already hold is pure waste; scrubbing revisits frames
 # constantly (drag left, drag back right), so a small LRU pays for itself.
 CACHE_SIZE = 120
+
+
+def _serialized(method):
+    """Run under the decoder lock.
+
+    The GUI thread can call close() while the decode thread is inside
+    frame_at(); PyAV then tears the container down mid-read and the
+    process dies. One lock around every entry point removes the race.
+    """
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._decode_lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 def _to_qimage(frame):
@@ -48,6 +63,7 @@ class ClipDecoder:
     """
 
     def __init__(self, path, thread_count=8):
+        self._decode_lock = threading.RLock()
         self.path = path
         self._container = av.open(path)
         self._stream = self._container.streams.video[0]
@@ -120,6 +136,7 @@ class ClipDecoder:
 
     # -- public -------------------------------------------------------------
 
+    @_serialized
     def frame_at(self, seconds):
         """Nearest decoded frame at `seconds`, as a QImage (None if past end)."""
         if self._container is None:      # closed underneath us during shutdown
@@ -148,6 +165,7 @@ class ClipDecoder:
             return None
         return self._decode_forward(seconds)
 
+    @_serialized
     def nearest_cached(self, seconds, tolerance=0.5):
         """Closest already-decoded frame, without touching the decoder.
 
@@ -171,6 +189,7 @@ class ClipDecoder:
                 best, best_gap = key, gap
         return self._cache.get(best) if best is not None else None
 
+    @_serialized
     def close(self):
         # Closing a PyAV container twice is not safe, so drop the reference
         # as well as closing it.

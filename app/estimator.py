@@ -9,7 +9,10 @@ selected range? - is answered separately by `quality_for`, which reads
 bits-per-pixel-per-frame.
 """
 
-MB = 1024 * 1024
+# Decimal, not binary: upload limits on the web are quoted in decimal MB,
+# so a 12 MB cap means 12,000,000 bytes. Treating it as binary would put an
+# 11.5 MB target at 12,058,624 bytes - over the cap, and rejected.
+MB = 1_000_000
 
 # Container/muxing overhead for MP4 - roughly 0.5% plus a fixed header cost.
 MUX_OVERHEAD = 0.005
@@ -45,7 +48,9 @@ def size_for_bitrate(video_bps, duration, audio_kbps=0, has_audio=False):
         return 0
     total_bits = video_bps * duration + audio_bits(duration, audio_kbps, has_audio)
     payload = total_bits / 8
-    return int(payload / (1.0 - MUX_OVERHEAD) + MUX_FIXED_BYTES)
+    # The fixed header is inside the overhead, not added after it, so that
+    # this is the exact inverse of bitrate_for_target.
+    return int((payload + MUX_FIXED_BYTES) / (1.0 - MUX_OVERHEAD))
 
 
 # Bits per pixel per frame at which H.264 is effectively transparent - the
@@ -89,10 +94,10 @@ def fmt_size(num_bytes):
     """Human-readable byte count."""
     if num_bytes <= 0:
         return "0 MB"
-    if num_bytes < 1024:
+    if num_bytes < 1000:
         return f"{num_bytes} B"
     if num_bytes < MB:
-        return f"{num_bytes / 1024:.0f} KB"
+        return f"{num_bytes / 1000:.0f} KB"
     return f"{num_bytes / MB:.2f} MB"
 
 

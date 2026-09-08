@@ -65,6 +65,7 @@ class ProxyWorker(QObject):
     ready = Signal(str, str)        # source path, proxy path
     failed = Signal(str)            # source path
     progress = Signal(str, int, int)  # source, done, total
+    finished = Signal()               # the run is over, quit the thread
 
     def __init__(self, sources):
         super().__init__()
@@ -97,6 +98,13 @@ class ProxyWorker(QObject):
                         pass
 
     def run(self):
+        # Always signal completion, so the thread quits even on failure.
+        try:
+            self._run()
+        finally:
+            self.finished.emit()
+
+    def _run(self):
         os.makedirs(CACHE_DIR, exist_ok=True)
         total = len(self.sources)
 
@@ -197,6 +205,8 @@ def start(sources, parent):
     thread = QThread(parent)
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
+    # Without this the thread never leaves its event loop and shutdown hangs.
+    worker.finished.connect(thread.quit)
     thread.finished.connect(thread.deleteLater)
     thread.start()
     return thread, worker

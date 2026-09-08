@@ -141,7 +141,11 @@ class Project:
             width = limit
             # Keep both dimensions even - yuv420p requires it.
             height = max(2, int(round(height * scale / 2)) * 2)
+        # Both dimensions, not just the width: a source with an odd height and
+        # no downscale to round it would otherwise reach yuv420p as-is and the
+        # encode would fail outright.
         width = max(2, int(round(width / 2)) * 2)
+        height = max(2, int(round(height / 2)) * 2)
 
         if self.settings.fps:
             fps = min(fps, self.settings.fps) if fps else self.settings.fps
@@ -210,8 +214,10 @@ class Project:
         )
 
         # The target is a ceiling: a cut that needs less gets a smaller file,
-        # rather than being padded up to the budget. Must match encoder.py.
-        bitrate = min(budget_bps, want_bps)
+        # rather than being padded up to the budget. Must match encoder.py -
+        # including its 50 kb/s floor and whole-kb/s rounding, or the panel
+        # promises a size the encoder was never asked to hit.
+        bitrate = max(50_000, int(min(budget_bps, want_bps) / 1000) * 1000)
         size = estimator.size_for_bitrate(bitrate, duration, akbps, audio)
         margin = 0.02 if settings.two_pass else 0.08
 
