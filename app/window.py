@@ -948,6 +948,24 @@ class MainWindow(QMainWindow):
                 )
             return
 
+        # Say what is about to happen before the window disappears. Windows
+        # shows its own elevation prompt for the installer, and an app that
+        # simply vanishes behind an unexplained UAC dialog looks broken -
+        # especially if that prompt is missed, since nothing then happens.
+        proceed = QMessageBox.information(
+            self, "Ready to install",
+            "Undercut will now close and the installer will open.\n\n"
+            "Windows will ask for permission to continue - choose Yes.\n"
+            "Your settings and presets are kept, and the Start Menu and "
+            "taskbar shortcuts keep working.",
+            QMessageBox.Ok | QMessageBox.Cancel, QMessageBox.Ok,
+        )
+        if proceed != QMessageBox.Ok:
+            self.statusBar().showMessage(
+                "Update ready - use File > Check for Updates to install it.",
+                8000)
+            return
+
         started, error = updater.launch_installer(result)
         if not started:
             QMessageBox.warning(

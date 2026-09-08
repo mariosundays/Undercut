@@ -137,6 +137,14 @@ class UpdateDownload(QObject):
         target = os.path.join(folder, name)
         partial = target + ".part"
 
+        # Already fetched in an earlier attempt - only the complete file ever
+        # gets this name, so re-downloading 90 MB would be pure waste.
+        if (self.expected_size and os.path.exists(target)
+                and os.path.getsize(target) == self.expected_size):
+            self.progress.emit(100)
+            self.finished.emit(True, target)
+            return
+
         try:
             with _open(self.url) as response:
                 total = self.expected_size or int(
