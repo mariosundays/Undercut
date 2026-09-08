@@ -90,6 +90,7 @@ with the output duration matching the selection exactly.
 | Open the export | `Play <file>` after exporting; `Ctrl`+click reveals it in Explorer |
 | Nudge | `←` / `→` one frame, `Shift` for one second |
 | Reset selection | Reset button, or `Ctrl+A` - back to the whole clip |
+| About / version | Version sits on the status bar; **File -> About Undercut** for build and licence details |
 | Update | **File -> Check for Updates** - installed builds also check quietly at startup and only speak up when there is something newer |
 | Export | `Export`, or `Ctrl+E` |
 

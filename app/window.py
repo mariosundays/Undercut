@@ -255,6 +255,12 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_panel())
         self.setCentralWidget(central)
         self.statusBar().showMessage("Open a video to start")
+        # A permanent widget sits on the right and survives showMessage, so the
+        # version is always readable without opening a dialog.
+        self.version_label = QLabel(f"v{__version__}")
+        self.version_label.setObjectName("hint")
+        self.version_label.setToolTip("Undercut version - File > About for details")
+        self.statusBar().addPermanentWidget(self.version_label)
 
     def _build_panel(self):
         panel = QFrame()
@@ -452,6 +458,10 @@ class MainWindow(QMainWindow):
         self.update_action = QAction("Check for &Updates...", self)
         self.update_action.triggered.connect(lambda: self.check_updates(True))
         file_menu.addAction(self.update_action)
+
+        about_action = QAction("&About Undercut", self)
+        about_action.triggered.connect(self.show_about)
+        file_menu.addAction(about_action)
 
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
@@ -799,6 +809,32 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage("Export failed", 6000)
             QMessageBox.critical(self, "Export failed", message)
+
+    # -- about --------------------------------------------------------------
+
+    def show_about(self):
+        """Version, licence, and where this build came from."""
+        build = "installed build" if updater.can_install() else "running from source"
+        ffmpeg = ffmpeg_tools.FFMPEG or "not found"
+        # Long paths would stretch the dialog; the tail is the informative part.
+        if len(ffmpeg) > 52:
+            ffmpeg = "..." + ffmpeg[-49:]
+
+        box = QMessageBox(self)
+        box.setWindowTitle("About Undercut")
+        box.setIconPixmap(app_icon().pixmap(64, 64))
+        box.setText(f"<h3>Undercut {__version__}</h3>"
+                    "<p>Trim a video to a target file size.</p>")
+        box.setInformativeText(
+            f"<p><b>Build:</b> {build}<br>"
+            f"<b>ffmpeg:</b> {ffmpeg}</p>"
+            f'<p><a href="{updater.RELEASES_PAGE}">Releases</a> &middot; '
+            f'<a href="https://github.com/{updater.REPO}">Source</a><br>'
+            "GPL-3.0. Icon from Lucide (ISC).</p>"
+        )
+        box.setTextFormat(Qt.RichText)
+        box.setStandardButtons(QMessageBox.Close)
+        box.exec()
 
     # -- updates ------------------------------------------------------------
 
