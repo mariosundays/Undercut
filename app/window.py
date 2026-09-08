@@ -5,15 +5,17 @@ import subprocess
 
 import qtawesome as qta
 
-from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QPainter
+from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtGui import (
+    QAction, QDesktopServices, QIcon, QKeySequence, QPainter,
+)
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel,
-    QMainWindow, QMessageBox, QProgressBar, QPushButton, QSizePolicy, QSlider,
-    QVBoxLayout, QWidget,
+    QMainWindow, QMessageBox, QProgressBar, QProgressDialog, QPushButton,
+    QSizePolicy, QSlider, QVBoxLayout, QWidget,
 )
 
-from . import encoder, estimator, ffmpeg_tools, proxy
+from . import __version__, encoder, estimator, ffmpeg_tools, proxy, updater
 from .model import Project
 from .playback import PlaybackEngine
 from .trimbar import TrimBar
@@ -144,6 +146,10 @@ class MainWindow(QMainWindow):
         self._proxy_jobs = []
         self._syncing = False
         self._last_export = ""
+        self._update_thread = None
+        self._update_worker = None
+        self._update_dialog = None
+        self._update_manual = False
         self.presets = PresetStore()
 
         self.setWindowTitle("Undercut")
@@ -166,6 +172,11 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
         if not ffmpeg_tools.available():
             QTimer.singleShot(100, self._warn_no_ffmpeg)
+        # Quietly, and only once the window is up - a packaged build asking
+        # GitHub one question costs nothing and says nothing unless there is
+        # actually something newer.
+        if updater.can_install():
+            QTimer.singleShot(2500, lambda: self.check_updates(False))
 
     # -- construction -------------------------------------------------------
 
@@ -423,7 +434,9 @@ class MainWindow(QMainWindow):
         return panel
 
     def _build_menu(self):
-        file_menu = self.menuBar().addMenu("&File")
+        # Held on the window: a local would let Python drop the only reference
+        # it owns, and shiboken can then collect the underlying QMenu.
+        self.file_menu = file_menu = self.menuBar().addMenu("&File")
 
         open_action = QAction("&Open Video...", self)
         open_action.setShortcut(QKeySequence.Open)
@@ -434,6 +447,11 @@ class MainWindow(QMainWindow):
         export_action.setShortcut("Ctrl+E")
         export_action.triggered.connect(self.export)
         file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+        self.update_action = QAction("Check for &Updates...", self)
+        self.update_action.triggered.connect(lambda: self.check_updates(True))
+        file_menu.addAction(self.update_action)
 
         file_menu.addSeparator()
         quit_action = QAction("&Quit", self)
@@ -782,6 +800,129 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Export failed", 6000)
             QMessageBox.critical(self, "Export failed", message)
 
+    # -- updates ------------------------------------------------------------
+
+    def check_updates(self, manual=False):
+        """Ask GitHub whether there is a newer release.
+
+        `manual` distinguishes the menu item from the quiet startup check: a
+        check nobody asked for should never interrupt with a dialog, so it
+        stays silent unless there is genuinely something to install.
+        """
+        if self._update_thread is not None:
+            return
+        self._update_manual = manual
+        if manual:
+            self.statusBar().showMessage("Checking for updates...", 4000)
+
+        worker = updater.UpdateCheck()
+        worker.found.connect(self._on_update_found)
+        worker.up_to_date.connect(self._on_update_current)
+        worker.failed.connect(self._on_update_failed)
+        worker.finished.connect(self._on_update_check_done)
+        self._update_worker = worker
+        self._update_thread = encoder.run_in_thread(worker, self)
+
+    def _on_update_check_done(self):
+        self._update_thread = None
+        self._update_worker = None
+
+    def _on_update_current(self):
+        if self._update_manual:
+            self.statusBar().showMessage(
+                f"Undercut {__version__} is the latest version.", 6000)
+
+    def _on_update_failed(self, message):
+        # A background check that cannot reach GitHub is not the user's
+        # problem; only say so if they asked.
+        if self._update_manual:
+            self.statusBar().showMessage(
+                f"Could not check for updates: {message}", 8000)
+
+    def _on_update_found(self, version, notes, url, size):
+        summary = "\n".join(
+            line for line in (notes or "").splitlines() if line.strip()
+        )[:600]
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Update available")
+        box.setIcon(QMessageBox.Information)
+        box.setText(f"Undercut {version} is available.\n"
+                    f"You have {__version__}.")
+        if summary:
+            box.setDetailedText(summary)
+
+        if url and updater.can_install():
+            box.setInformativeText(
+                f"Download and install it now? ({size / 1048576:.0f} MB)\n"
+                "Undercut will close to finish installing."
+            )
+            box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+            box.setDefaultButton(QMessageBox.Yes)
+            if box.exec() == QMessageBox.Yes:
+                self._download_update(url, size)
+            return
+
+        # Running from source, or no installer on the release: send them to
+        # the page rather than pretending we can install it.
+        box.setInformativeText("Open the download page?")
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        if box.exec() == QMessageBox.Yes:
+            QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))
+
+    def _download_update(self, url, size):
+        self._update_dialog = QProgressDialog(
+            "Downloading the installer...", "Cancel", 0, 100, self)
+        self._update_dialog.setWindowTitle("Updating Undercut")
+        self._update_dialog.setWindowModality(Qt.WindowModal)
+        self._update_dialog.setMinimumDuration(0)
+        self._update_dialog.setAutoClose(False)
+        self._update_dialog.setValue(0)
+
+        worker = updater.UpdateDownload(url, size)
+        worker.progress.connect(self._on_update_progress)
+        worker.finished.connect(self._on_update_downloaded)
+        self._update_dialog.canceled.connect(worker.cancel)
+        self._update_worker = worker
+        self._update_thread = encoder.run_in_thread(worker, self)
+
+    def _on_update_progress(self, percent):
+        if self._update_dialog is None:
+            return
+        if percent < 0:
+            # Unknown length - show a busy bar rather than a fake percentage.
+            self._update_dialog.setRange(0, 0)
+        else:
+            self._update_dialog.setValue(percent)
+
+    def _on_update_downloaded(self, ok, result):
+        if self._update_dialog is not None:
+            self._update_dialog.close()
+            self._update_dialog = None
+        self._update_thread = None
+        self._update_worker = None
+
+        if not ok:
+            if result != "Cancelled.":
+                QMessageBox.warning(
+                    self, "Update failed",
+                    f"The installer could not be downloaded.\n\n{result}\n\n"
+                    f"You can download it manually from\n"
+                    f"{updater.RELEASES_PAGE}",
+                )
+            return
+
+        started, error = updater.launch_installer(result)
+        if not started:
+            QMessageBox.warning(
+                self, "Update failed",
+                f"The installer could not be started.\n\n{error}",
+            )
+            return
+
+        # The installer cannot replace files this process is using, so leave.
+        self.close()
+
     def _warn_no_ffmpeg(self):
         QMessageBox.critical(
             self, "FFmpeg not found",
@@ -823,6 +964,15 @@ class MainWindow(QMainWindow):
         if self._encode_thread is not None:
             self._encode_thread.quit()
             self._encode_thread.wait(4000)
+        # A download in flight holds an open socket; cancelling lets its loop
+        # break out rather than blocking the wait below.
+        if self._update_worker is not None:
+            cancel = getattr(self._update_worker, "cancel", None)
+            if cancel:
+                cancel()
+        if self._update_thread is not None:
+            self._update_thread.quit()
+            self._update_thread.wait(4000)
         for thread, worker in self._proxy_jobs:
             worker.cancel(wait=True)
             thread.quit()
