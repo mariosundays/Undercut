@@ -10,7 +10,18 @@ come in under 12 MB.
 
 ---
 
-## Requirements
+## Download
+
+Get the Windows installer or portable zip from the
+[latest release](https://github.com/mariosundays/Undercut/releases/latest).
+ffmpeg is bundled, so there is nothing else to install. The installer sets
+Undercut up for your user only (no admin rights needed), and the app offers
+updates from within itself.
+
+See the [code signing policy](CODE_SIGNING.md) for how release builds are
+signed and what the app sends over the network (only the update check).
+
+## Requirements (running from source)
 
 - Python 3.11+
 - `pip install -r requirements.txt` (PySide6, PyAV, QtAwesome)
