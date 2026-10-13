@@ -26,10 +26,15 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
+        shell: pwsh
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          # Compile PyInstaller's bootloader on the runner instead of using the
+          # prebuilt one. The stock bootloader is shared with plenty of malware,
+          # so antivirus heuristics flag it; a locally built one does not match.
+          $env:PYINSTALLER_COMPILE_BOOTLOADER = "1"
+          pip install --no-binary pyinstaller pyinstaller
 
       - name: Read version
         id: ver

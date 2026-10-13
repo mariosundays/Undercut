@@ -41,6 +41,10 @@ class Project:
         self.settings = ExportSettings()
         self.output_path = ""
         self.proxy_path = None
+        # (x, y, w, h) as fractions of the source frame, or None for the
+        # whole frame. Fractions, so the box means the same thing on the
+        # 540p proxy the preview shows and on the original export reads.
+        self.crop = None
 
     # -- loading ------------------------------------------------------------
 
@@ -51,6 +55,7 @@ class Project:
         self.out_point = media.duration
         self.output_path = ""
         self.proxy_path = None
+        self.crop = None
 
     @property
     def loaded(self):
@@ -126,14 +131,50 @@ class Project:
         fps = self.media.fps if self.loaded and self.media.fps else 25.0
         return 1.0 / fps
 
+    # -- crop ---------------------------------------------------------------
+
+    def set_crop(self, rect):
+        """Set the crop from fractions; a box covering the frame clears it."""
+        if rect is None:
+            self.crop = None
+            return
+        x, y, w, h = rect
+        x = min(max(0.0, x), 1.0)
+        y = min(max(0.0, y), 1.0)
+        w = min(max(0.0, w), 1.0 - x)
+        h = min(max(0.0, h), 1.0 - y)
+        if w >= 0.999 and h >= 0.999:
+            self.crop = None
+        else:
+            self.crop = (x, y, w, h)
+
+    def crop_pixels(self):
+        """The crop in source pixels as (x, y, w, h), all even, or None.
+
+        Even everywhere: yuv420p stores chroma per 2x2 block, so an odd
+        offset or size shifts colour against luma or fails the encode.
+        """
+        if not self.loaded or self.crop is None:
+            return None
+        sw, sh = self.media.width, self.media.height
+        fx, fy, fw, fh = self.crop
+        w = max(16, int(fw * sw) // 2 * 2)
+        h = max(16, int(fh * sh) // 2 * 2)
+        x = min(int(fx * sw) // 2 * 2, max(0, sw - w))
+        y = min(int(fy * sh) // 2 * 2, max(0, sh - h))
+        return x, y, min(w, sw), min(h, sh)
+
     # -- output -------------------------------------------------------------
 
     def output_geometry(self):
-        """Resolved (width, height, fps) after the downscale / fps settings."""
+        """Resolved (width, height, fps) after crop, downscale and fps."""
         if not self.loaded:
             return 0, 0, 0.0
 
         width, height, fps = self.media.width, self.media.height, self.media.fps
+        crop = self.crop_pixels()
+        if crop:
+            width, height = crop[2], crop[3]
 
         limit = self.settings.max_width
         if limit and width > limit:

@@ -59,7 +59,13 @@ def build_command(project, output_path, pass_num=0, passlog=None):
         "-i", project.media.path,
     ]
 
-    filters = [f"scale={width}:{height}:flags=lanczos"]
+    filters = []
+    crop = project.crop_pixels()
+    if crop:
+        # Crop first, at source resolution, so the scale works on the kept
+        # region only.
+        filters.append("crop={2}:{3}:{0}:{1}".format(*crop))
+    filters.append(f"scale={width}:{height}:flags=lanczos")
     speed = max(0.01, settings.speed)
     if speed != 1.0:
         # setpts restamps the frames closer together; the fps filter after it
@@ -349,6 +355,11 @@ def _cleanup_passlogs(base):
 def run_in_thread(worker, parent):
     """Move `worker` onto a QThread and start it."""
     thread = QThread(parent)
+    # The thread owns the worker's lifetime. Callers drop their own reference
+    # in the worker's `finished` slot, while `run()` is still unwinding on the
+    # thread - without this, the worker is freed under it and the process
+    # dies (this crashed every in-app update the moment the download ended).
+    thread._worker = worker
     worker.moveToThread(thread)
     thread.started.connect(worker.run)
     worker.finished.connect(thread.quit)

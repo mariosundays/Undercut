@@ -5,7 +5,7 @@ import subprocess
 
 import qtawesome as qta
 
-from PySide6.QtCore import QSize, Qt, QTimer, QUrl
+from PySide6.QtCore import QSettings, QSize, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QAction, QDesktopServices, QIcon, QKeySequence, QPainter,
 )
@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import __version__, encoder, estimator, ffmpeg_tools, proxy, updater
+from .cropbox import PreviewWidget
 from .model import Project
 from .playback import PlaybackEngine
 from .trimbar import TrimBar
@@ -105,37 +106,6 @@ QProgressBar::chunk { background: #2d5a7a; border-radius: 2px; }
 """
 
 
-class PreviewWidget(QWidget):
-    """Letterboxed display for the decoded frame."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self._image = None
-        self.setMinimumHeight(280)
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-
-    def set_image(self, image):
-        self._image = image
-        self.update()
-
-    def clear(self):
-        self._image = None
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), Qt.black)
-        if self._image is None or self._image.isNull():
-            painter.end()
-            return
-        scaled = self._image.scaled(
-            self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation
-        )
-        painter.drawImage((self.width() - scaled.width()) // 2,
-                          (self.height() - scaled.height()) // 2, scaled)
-        painter.end()
-
-
 class MainWindow(QMainWindow):
 
     def __init__(self):
@@ -202,7 +172,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
-        self.preview = PreviewWidget()
+        self.preview = PreviewWidget(self.project)
         layout.addWidget(self.preview, 1)
 
         transport = QHBoxLayout()
@@ -242,6 +212,13 @@ class MainWindow(QMainWindow):
         )
         for btn in (self.in_btn, self.out_btn, self.all_btn):
             transport.addWidget(btn)
+        transport.addSpacing(8)
+
+        self.crop_btn = self._tool_button(
+            "mdi.crop", "Crop: drag a box over the frame   (C)",
+            checkable=True, enabled=False,
+        )
+        transport.addWidget(self.crop_btn)
 
         transport.addStretch()
         self.time_label = QLabel("00:00.000 / 00:00.000")
@@ -400,6 +377,21 @@ class MainWindow(QMainWindow):
         speed_row.addWidget(self.speed_label)
         layout.addLayout(speed_row)
 
+        crop_row = QHBoxLayout()
+        crop_row.addWidget(QLabel("Crop"))
+        self.aspect_combo = QComboBox()
+        for label, value in (("Free", None), ("16:9", 16 / 9), ("4:3", 4 / 3),
+                             ("1:1", 1.0), ("4:5", 4 / 5), ("9:16", 9 / 16)):
+            self.aspect_combo.addItem(label, value)
+        self.aspect_combo.setToolTip("Lock the crop box to a shape")
+        crop_row.addWidget(self.aspect_combo, 1)
+        self.crop_reset_btn = self._tool_button(
+            "mdi.crop-free", "Remove the crop - export the whole frame",
+            enabled=False,
+        )
+        crop_row.addWidget(self.crop_reset_btn)
+        layout.addLayout(crop_row)
+
         self.audio_check = QCheckBox("Keep audio")
         layout.addWidget(self.audio_check)
 
@@ -481,6 +473,10 @@ class MainWindow(QMainWindow):
         self.preset_btn.clicked.connect(self._show_presets)
         self.lock_btn.toggled.connect(self._on_lock_toggled)
         self.result_btn.clicked.connect(self._open_export)
+        self.crop_btn.toggled.connect(self._on_crop_toggled)
+        self.crop_reset_btn.clicked.connect(self._reset_crop)
+        self.aspect_combo.currentIndexChanged.connect(self._on_aspect_changed)
+        self.preview.crop_changed.connect(self.refresh)
 
         self.trim.playhead_moved.connect(self.scrub_draft)
         self.trim.playhead_settled.connect(self.scrub)
@@ -559,8 +555,9 @@ class MainWindow(QMainWindow):
         elif proxy.needed(media):
             self._start_proxy(path)
 
+        self.crop_btn.setChecked(False)
         for btn in (self.play_btn, self.loop_btn, self.in_btn, self.out_btn,
-                    self.all_btn):
+                    self.all_btn, self.crop_btn):
             btn.setEnabled(True)
 
         self.trim.reset()
@@ -642,6 +639,23 @@ class MainWindow(QMainWindow):
             "Loop on - the selection repeats" if on else "Loop off", 2500
         )
 
+    def _on_crop_toggled(self, on):
+        self.preview.set_editing(on)
+        self.statusBar().showMessage(
+            "Crop: drag to draw, drag the box or its handles to adjust, "
+            "double-click to reset - press C or Enter when done"
+            if on else "Preview shows the cropped export", 6000)
+
+    def _on_aspect_changed(self):
+        self.preview.set_aspect(self.aspect_combo.currentData())
+        if self.aspect_combo.currentData() and not self.crop_btn.isChecked():
+            self.crop_btn.setChecked(True)
+
+    def _reset_crop(self):
+        self.project.set_crop(None)
+        self.preview.update()
+        self.refresh()
+
     def _on_lock_toggled(self, locked):
         self.target_spin.set_locked(locked)
         self.lock_btn.setIcon(qta.icon(
@@ -685,6 +699,12 @@ class MainWindow(QMainWindow):
             self.toggle_play()
         elif event.key() == Qt.Key_L and not event.modifiers():
             self.loop_btn.toggle()
+        elif (event.key() == Qt.Key_C and not event.modifiers()
+                and self.crop_btn.isEnabled()):
+            self.crop_btn.toggle()
+        elif (event.key() in (Qt.Key_Return, Qt.Key_Enter, Qt.Key_Escape)
+                and self.crop_btn.isChecked()):
+            self.crop_btn.setChecked(False)
         else:
             super().keyPressEvent(event)
 
@@ -753,6 +773,9 @@ class MainWindow(QMainWindow):
         )
         if speed > 1.0:
             detail += f" · {speed:g}x speed"
+        if self.project.crop is not None:
+            detail += " · cropped"
+        self.crop_reset_btn.setEnabled(self.project.crop is not None)
         self.detail_label.setText(detail)
         self.export_btn.setEnabled(ffmpeg_tools.available())
 
@@ -876,6 +899,11 @@ class MainWindow(QMainWindow):
                 f"Could not check for updates: {message}", 8000)
 
     def _on_update_found(self, version, notes, url, size):
+        # A version the user chose to skip only comes back when they ask.
+        settings = QSettings("Undercut", "Undercut")
+        if not self._update_manual and settings.value("skip_version") == version:
+            return
+
         summary = "\n".join(
             line for line in (notes or "").splitlines() if line.strip()
         )[:600]
@@ -895,16 +923,21 @@ class MainWindow(QMainWindow):
             )
             box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
             box.setDefaultButton(QMessageBox.Yes)
-            if box.exec() == QMessageBox.Yes:
-                self._download_update(url, size)
-            return
+        else:
+            # Running from source, or no installer on the release: send them
+            # to the page rather than pretending we can install it.
+            box.setInformativeText("Open the download page?")
+            box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        skip = box.addButton("Skip This Version", QMessageBox.RejectRole)
 
-        # Running from source, or no installer on the release: send them to
-        # the page rather than pretending we can install it.
-        box.setInformativeText("Open the download page?")
-        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        if box.exec() == QMessageBox.Yes:
-            QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))
+        answer = box.exec()
+        if box.clickedButton() is skip:
+            settings.setValue("skip_version", version)
+        elif answer == QMessageBox.Yes:
+            if url and updater.can_install():
+                self._download_update(url, size)
+            else:
+                QDesktopServices.openUrl(QUrl(updater.RELEASES_PAGE))
 
     def _download_update(self, url, size):
         self._update_dialog = QProgressDialog(
